@@ -1,0 +1,15 @@
+{
+  "name": "pixel-reels",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Пиксельные мультяшные рилсы из кода: сценарий + твой голос → MP4 1080×1920",
+  "type": "module",
+  "scripts": {
+    "setup": "npx playwright install chromium",
+    "text": "node tools/teleprompter.mjs",
+    "render": "node src/render.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "Герой",
+  "skin": "#e9b893",
+  "skinShade": "#c99070",
+  "hair": "#4a3324",
+  "eyes": "#5b86b0",
+  "hat": { "enabled": true, "color": "#dcd2c2", "shade": "#b9ad99" },
+  "hoodie": "#1d1d22",
+  "hoodieShade": "#111114",
+  "strings": "#d9d9d9",
+  "beard": false,
+  "beardColor": "#7a5640",
+  "glasses": false
+}

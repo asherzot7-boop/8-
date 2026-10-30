@@ -1,0 +1,498 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: #000; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1080" height="1920"></canvas>
+<script>
+// Рендерер одного кадра. render.mjs вызывает setup(data), затем frame(i) для каждого кадра.
+const W = 1080, H = 1920, TOP = 960;
+const GW = 135, GH = 120, S = 8; // пиксельная сетка нижней половины (135×120 × 8 = 1080×960)
+const SANS = '"Inter", "Segoe UI", Arial, sans-serif';
+const SERIF = '"Lora", Georgia, "DejaVu Serif", serif';
+const MONO = '"JetBrains Mono", Consolas, "DejaVu Sans Mono", monospace';
+const ORANGE = '#f5a524', GREEN = '#3ddc84';
+
+const c = document.getElementById('c');
+const ctx = c.getContext('2d');
+const low = document.createElement('canvas');
+low.width = GW; low.height = GH;
+const g = low.getContext('2d');
+
+let D = null;
+const images = {};
+
+window.setup = async (data) => {
+  D = data;
+  await Promise.all([
+    document.fonts.load(`800 64px ${SANS}`, 'Ая'),
+    document.fonts.load(`italic 600 64px ${SERIF}`, 'Ая'),
+    document.fonts.load(`500 24px ${MONO}`, 'Ая'),
+  ]);
+  for (const s of D.scenes) {
+    const src = s.card && s.card.src;
+    if (src && !images[src]) {
+      images[src] = await new Promise((res) => {
+        const im = new Image();
+        im.onload = () => res(im);
+        im.onerror = () => res(null);
+        im.src = src;
+      });
+    }
+  }
+};
+
+window.frame = (i) => {
+  const t = i / D.fps;
+  const si = sceneAt(t);
+  const scene = D.scenes[si];
+  const lt = t - scene.start;
+  const level = D.levels ? (D.levels[i] || 0) : 0;
+  drawTop(scene, lt, si);
+  drawRoom(t, scene, level);
+  drawCaption(t);
+  return c.toDataURL('image/jpeg', 0.9);
+};
+
+function sceneAt(t) {
+  let k = 0;
+  for (let j = 0; j < D.scenes.length; j++) if (t >= D.scenes[j].start) k = j;
+  return k;
+}
+
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const easeOut = (x) => 1 - Math.pow(1 - clamp(x), 3);
+const hash = (n) => { const x = Math.sin(n * 127.1) * 43758.5453; return x - Math.floor(x); };
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+}
+
+// ───────────── верхняя половина: заголовок + карточка ─────────────
+
+function drawTop(scene, lt, si) {
+  ctx.fillStyle = '#12100e';
+  ctx.fillRect(0, 0, W, TOP);
+  ctx.fillStyle = '#26221e';
+  for (let y = 12; y < TOP; y += 28) for (let x = 12; x < W; x += 28) ctx.fillRect(x, y, 3, 3);
+
+  const a = easeOut(lt / 0.35);
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  const hasAccent = !!scene.accent;
+  if (scene.title) {
+    ctx.fillStyle = '#fff';
+    ctx.font = `800 70px ${SANS}`;
+    const y = hasAccent ? 150 : 200;
+    if (scene.num) {
+      // «2 · Сложно?» — номер оранжевым перед заголовком
+      const num = `${scene.num} · `;
+      const wNum = ctx.measureText(num).width, wT = ctx.measureText(scene.title).width;
+      const x0 = W / 2 - (wNum + wT) / 2;
+      ctx.textAlign = 'left';
+      ctx.fillStyle = ORANGE; ctx.fillText(num, x0, y);
+      ctx.fillStyle = '#fff'; ctx.fillText(scene.title, x0 + wNum, y);
+      ctx.textAlign = 'center';
+    } else {
+      ctx.fillText(scene.title, W / 2, y);
+    }
+  }
+  if (hasAccent) {
+    ctx.font = `italic 600 62px ${SERIF}`;
+    const y = scene.title ? 232 : 200;
+    ctx.fillStyle = ORANGE;
+    ctx.shadowColor = 'rgba(245,165,36,0.45)';
+    ctx.shadowBlur = 18;
+    ctx.fillText(scene.accent, W / 2, y);
+    const w = ctx.measureText(scene.accent).width * easeOut((lt - 0.15) / 0.4);
+    ctx.fillRect(W / 2 - ctx.measureText(scene.accent).width / 2, y + 14, w, 4);
+  }
+  ctx.restore();
+
+  if (scene.card) {
+    const ca = easeOut((lt - 0.1) / 0.4);
+    ctx.save();
+    ctx.globalAlpha = ca;
+    ctx.translate(W / 2, 600);
+    const sc = 0.92 + 0.08 * ca;
+    ctx.scale(sc, sc);
+    ctx.translate(-W / 2, -600);
+    const draw = CARDS[scene.card.type];
+    if (draw) draw(scene.card, lt, scene);
+    ctx.restore();
+  }
+}
+
+function pill(text, cx, cy, { color = ORANGE, fill = 'rgba(0,0,0,0.55)', size = 40 } = {}) {
+  ctx.font = `700 ${size}px ${SANS}`;
+  const w = ctx.measureText(text).width + size * 1.1, h = size * 1.6;
+  ctx.save();
+  roundRect(cx - w / 2, cy - h / 2, w, h, h / 2);
+  ctx.fillStyle = fill; ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = color;
+  ctx.shadowColor = color; ctx.shadowBlur = 16; ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, cx, cy + 2);
+  ctx.restore();
+}
+
+function panel(x, y, w, h, border, glow = 0) {
+  ctx.save();
+  roundRect(x, y, w, h, 28);
+  ctx.fillStyle = '#1a1714'; ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = border;
+  ctx.shadowColor = border; ctx.shadowBlur = glow; ctx.stroke();
+  ctx.restore();
+}
+
+const fmt = (n) => Math.round(n).toLocaleString('ru-RU').replace(/ /g, ' ');
+
+const CARDS = {
+  // большая цифра, которая «набегает»: {type:"stat", label, value, from?, suffix?, items?:[{label,value}]}
+  stat(card, lt) {
+    const x = 110, y = 380, w = 860, h = card.items ? 380 : 280;
+    panel(x, y, w, h, GREEN, 24);
+    ctx.fillStyle = '#9a948c'; ctx.font = `500 26px ${MONO}`; ctx.textAlign = 'left';
+    ctx.fillText((card.label || '').toUpperCase(), x + 40, y + 60);
+    const v = (card.from || 0) + ((card.value || 0) - (card.from || 0)) * easeOut((lt - 0.3) / 1.2);
+    ctx.fillStyle = GREEN; ctx.font = `800 70px ${SANS}`; ctx.fillText('▲', x + 40, y + 180);
+    ctx.fillStyle = '#fff'; ctx.font = `800 130px ${SANS}`;
+    ctx.fillText(fmt(v) + (card.suffix || ''), x + 120, y + 190);
+    (card.items || []).forEach((it, k) => {
+      const bx = x + 40 + k * 400, by = y + 240;
+      roundRect(bx, by, 380, 100, 18); ctx.fillStyle = '#25211d'; ctx.fill();
+      ctx.fillStyle = '#bbb'; ctx.font = `500 28px ${MONO}`; ctx.fillText(it.label.toUpperCase(), bx + 28, by + 62);
+      ctx.fillStyle = '#fff'; ctx.font = `800 44px ${SANS}`; ctx.textAlign = 'right';
+      ctx.fillText(it.value, bx + 352, by + 66); ctx.textAlign = 'left';
+    });
+  },
+
+  // строка запроса в чат с ИИ, текст печатается: {type:"chat", text, placeholder?, tags?:[]}
+  chat(card, lt) {
+    const x = 110, y = 420, w = 860, h = 300;
+    const typed = Math.floor(card.text.length * clamp((lt - 0.5) / 1.6));
+    panel(x, y, w, h, typed > 0 ? ORANGE : '#3a3530', typed > 0 ? 26 : 0);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = ORANGE; ctx.font = `800 54px ${SANS}`; ctx.fillText('✱', x + 40, y + 82);
+    ctx.font = `600 40px ${SANS}`;
+    if (typed === 0) {
+      ctx.fillStyle = '#77716a'; ctx.fillText(card.placeholder || 'Что сделаем?', x + 96, y + 78);
+    } else {
+      ctx.fillStyle = '#fff';
+      wrap(card.text.slice(0, typed) + (lt % 0.8 < 0.4 ? '▍' : ''), x + 96, y + 78, w - 140, 54);
+    }
+    (card.tags || []).forEach((tag, k) => pill(tag, x + 130 + k * 230, y + h - 50, { size: 24 }));
+    ctx.beginPath(); ctx.arc(x + w - 56, y + h - 56, 30, 0, Math.PI * 2);
+    ctx.fillStyle = ORANGE; ctx.fill();
+    ctx.fillStyle = '#1a1714'; ctx.font = `800 34px ${SANS}`; ctx.textAlign = 'center';
+    ctx.fillText('↑', x + w - 56, y + h - 44);
+  },
+
+  // чек-лист, пункты отмечаются по очереди: {type:"list", title, items:[...]}
+  list(card, lt) {
+    const n = card.items.length, x = 170, y = 330, w = 740, h = 130 + n * 96;
+    panel(x, y, w, h, '#3a3530');
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#9a948c'; ctx.font = `500 26px ${MONO}`;
+    ctx.fillText((card.title || '').toUpperCase(), x + 40, y + 62);
+    card.items.forEach((it, k) => {
+      const on = lt > 0.5 + k * 0.45;
+      const by = y + 96 + k * 96;
+      roundRect(x + 30, by, w - 60, 80, 16);
+      ctx.fillStyle = '#211d19'; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = on ? GREEN : '#3a3530'; ctx.stroke();
+      ctx.beginPath(); ctx.arc(x + 80, by + 40, 18, 0, Math.PI * 2);
+      ctx.fillStyle = on ? GREEN : '#2e2924'; ctx.fill();
+      if (on) { ctx.fillStyle = '#0d1a10'; ctx.font = `800 26px ${SANS}`; ctx.textAlign = 'center'; ctx.fillText('✓', x + 80, by + 50); ctx.textAlign = 'left'; }
+      ctx.fillStyle = on ? '#fff' : '#8a847c'; ctx.font = `600 38px ${SANS}`;
+      ctx.fillText(it, x + 120, by + 54);
+    });
+  },
+
+  // «мысль-пузырь» с сомнением: {type:"bubble", label, text}
+  bubble(card, lt) {
+    const x = 170, y = 400, w = 740, h = 200;
+    ctx.save();
+    roundRect(x, y, w, h, 34); ctx.fillStyle = '#f6efe2'; ctx.fill();
+    ctx.restore();
+    [[x + 90, y + h + 40, 22], [x + 60, y + h + 90, 12]].forEach(([cx, cy, r]) => {
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fillStyle = '#f6efe2'; ctx.fill();
+    });
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#c47d10'; ctx.font = `600 28px ${MONO}`; ctx.fillText((card.label || '').toUpperCase(), x + 44, y + 70);
+    ctx.fillStyle = '#1a1714'; ctx.font = `800 58px ${SANS}`; ctx.fillText(card.text, x + 44, y + 150);
+    ctx.fillStyle = ORANGE; ctx.font = `800 110px ${SERIF}`;
+    ctx.fillText('?', x + w - 40, y + 50 + Math.sin(lt * 4) * 6);
+  },
+
+  // картинка (скриншот статистики и т.п.): {type:"image", src, badge?}
+  image(card, lt) {
+    const im = images[card.src];
+    if (!im) return;
+    const maxW = 820, maxH = card.badge ? 520 : 600;
+    const k = Math.min(maxW / im.width, maxH / im.height);
+    const w = im.width * k, h = im.height * k, x = W / 2 - w / 2, y = 330 + (maxH - h) / 2;
+    ctx.save();
+    ctx.shadowColor = 'rgba(245,165,36,0.35)'; ctx.shadowBlur = 30;
+    roundRect(x, y, w, h, 24); ctx.fillStyle = '#000'; ctx.fill();
+    ctx.shadowBlur = 0; ctx.clip(); ctx.drawImage(im, x, y, w, h);
+    ctx.restore();
+    if (card.badge) pill(card.badge, W / 2, 330 + maxH + 70);
+  },
+
+  // сравнение «нейросеть vs код»: {type:"versus", left, right, leftNote, rightNote}
+  versus(card, lt) {
+    const y = 340, w = 380, h = 520;
+    [[120, card.left || 'ВИДЕО-НЕЙРОСЕТЬ', card.leftNote || 'случайно · с глюками', '#5a3a3a', false],
+     [580, card.right || 'КОД CLAUDE', card.rightNote || 'каждый кадр под контролем', GREEN, true]]
+      .forEach(([x, head, note, col, good]) => {
+        panel(x, y, w, h, col, good ? 24 : 0);
+        ctx.textAlign = 'left';
+        ctx.fillStyle = good ? GREEN : '#9a948c'; ctx.font = `600 24px ${MONO}`; ctx.fillText(head, x + 28, y + 50);
+        roundRect(x + 28, y + 74, w - 56, 320, 14);
+        ctx.fillStyle = good ? '#1f2a3d' : '#3d1f24'; ctx.fill();
+        ctx.fillStyle = '#ccc'; ctx.font = `500 28px ${SANS}`; wrap(note, x + 28, y + 450, w - 56, 36);
+        if (!good) {
+          const p = easeOut((lt - 0.4) / 0.4);
+          ctx.strokeStyle = ORANGE; ctx.lineWidth = 22; ctx.lineCap = 'round';
+          ctx.beginPath(); ctx.moveTo(x + 80, y + 120); ctx.lineTo(x + 80 + 220 * p, y + 120 + 230 * p);
+          ctx.moveTo(x + 300, y + 120); ctx.lineTo(x + 300 - 220 * p, y + 120 + 230 * p); ctx.stroke();
+        } else {
+          ctx.fillStyle = GREEN; ctx.font = `800 140px ${SANS}`; ctx.textAlign = 'center';
+          ctx.fillText('</>', x + w / 2, y + 290);
+        }
+      });
+  },
+};
+
+function wrap(text, x, y, maxW, lh) {
+  const words = text.split(' ');
+  let line = '';
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    if (ctx.measureText(test).width > maxW && line) { ctx.fillText(line, x, y); y += lh; line = w; }
+    else line = test;
+  }
+  ctx.fillText(line, x, y);
+}
+
+// ───────────── нижняя половина: пиксельная комната + герой ─────────────
+
+const r = (x, y, w, h, col) => { g.fillStyle = col; g.fillRect(Math.round(x), Math.round(y), w, h); };
+
+function drawRoom(t, scene, level) {
+  // стена из кирпича
+  r(0, 0, GW, GH, '#3a2419');
+  for (let row = 0; row < GH / 6; row++) {
+    const off = row % 2 ? 7 : 0;
+    for (let col = -1; col < GW / 14 + 1; col++) {
+      const tone = hash(row * 31 + col);
+      const bx = col * 14 + off, by = row * 6;
+      r(bx, by, 13, 5, tone > 0.66 ? '#43291c' : tone > 0.33 ? '#3d251a' : '#352015');
+    }
+  }
+  // окно с ночным городом
+  r(6, 6, 40, 52, '#1a120d');
+  r(8, 8, 36, 48, '#141c33');
+  for (let k = 0; k < 6; k++) {
+    const bh = 14 + Math.floor(hash(k + 3) * 22), bx = 8 + k * 6;
+    r(bx, 56 - bh, 6, bh, '#0c1122');
+    for (let wy = 56 - bh + 2; wy < 54; wy += 3)
+      if (hash(k * 17 + wy) > 0.55) r(bx + 1 + (wy % 2) * 2, wy, 1, 1, hash(wy + k + Math.floor(t)) > 0.95 ? '#5a4a20' : '#f2c14e');
+  }
+  r(25, 8, 2, 48, '#1a120d'); r(8, 30, 36, 2, '#1a120d');
+  // полка справа
+  r(100, 64, 35, 3, '#5a3a22'); r(100, 67, 35, 1, '#2a1a10');
+  r(110, 56, 8, 8, '#1f1f24'); leaf(114, 56, -1, -1, 6, '#3f8a3a'); leaf(114, 56, 1, -1, 7, '#2f6b2f'); leaf(114, 56, 0, -1, 8, '#4c9a3c');
+  r(124, 52, 5, 12, '#8a6a4a'); r(123, 51, 7, 2, '#a07c56');
+  // большое растение слева
+  r(4, 100, 20, 20, '#2e241e'); r(3, 98, 22, 3, '#3b2e26');
+  [[-1, -2, 18], [1, -2, 20], [-2, -1, 14], [2, -1, 15], [0, -2, 24], [-1, -1, 16], [1, -1, 18]]
+    .forEach(([dx, dy, len], k) => leaf(14, 99, dx, dy, len, k % 2 ? '#2f6b2f' : '#3f8a3a', Math.sin(t * 1.3 + k) * 0.3));
+
+  drawHero(t, scene.pose || 'idle', level);
+
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(low, 0, TOP, W, H - TOP);
+  // тёплый свет лампы и виньетка поверх пикселей
+  const glow = ctx.createRadialGradient(860, TOP + 260, 40, 860, TOP + 260, 900);
+  glow.addColorStop(0, 'rgba(255,170,80,0.28)');
+  glow.addColorStop(1, 'rgba(255,170,80,0)');
+  ctx.fillStyle = glow; ctx.fillRect(0, TOP, W, H - TOP);
+  const vig = ctx.createLinearGradient(0, TOP, 0, TOP + 140);
+  vig.addColorStop(0, 'rgba(18,16,14,1)'); vig.addColorStop(1, 'rgba(18,16,14,0)');
+  ctx.fillStyle = vig; ctx.fillRect(0, TOP, W, 140);
+}
+
+function leaf(x, y, dx, dy, len, col, sway = 0) {
+  for (let i = 0; i < len; i++) {
+    const w = i < 2 || i > len - 3 ? 1 : 2;
+    r(x + dx * i + sway * i * 0.3, y + dy * i * 0.9 + (Math.abs(dx) > 1 ? i * 0.2 : 0), w + 1, w, col);
+  }
+}
+
+function drawHero(t, pose, level) {
+  const h = D.hero;
+  const cx = 67;
+  const breathe = Math.round(Math.sin(t * 2) * 0.6);
+  const talk = level > 0.15 ? Math.round(Math.sin(t * 9)) : 0;
+  const hy = breathe + (talk > 0 ? -1 : 0); // смещение головы
+  const blink = (t % 3.7) < 0.12;
+  const mouth = level > 0.6 ? 2 : level > 0.2 ? 1 : 0;
+
+  // туловище
+  r(cx - 22, 86 + breathe, 44, 6, h.hoodieShade);
+  r(cx - 27, 90 + breathe, 54, 40, h.hoodie);
+  r(cx - 30, 96 + breathe, 60, 30, h.hoodie);
+  r(cx - 9, 86 + breathe, 18, 6, h.hoodieShade);
+  r(cx - 6, 92 + breathe, 1, 14, h.strings); r(cx + 5, 92 + breathe, 1, 14, h.strings);
+  r(cx - 7, 106 + breathe, 3, 2, h.strings); r(cx + 4, 106 + breathe, 3, 2, h.strings);
+  drawArms(pose, cx, breathe, t);
+
+  // шея и голова
+  r(cx - 6, 78 + hy, 12, 9, h.skinShade);
+  const y0 = hy;
+  r(cx - 12, 42 + y0, 24, 2, h.skin);
+  r(cx - 14, 44 + y0, 28, 30, h.skin);
+  r(cx - 13, 74 + y0, 26, 2, h.skin);
+  r(cx - 11, 76 + y0, 22, 2, h.skin);
+  r(cx - 8, 78 + y0, 16, 2, h.skin);
+  r(cx + 10, 46 + y0, 4, 28, h.skinShade);
+  r(cx + 8, 74 + y0, 3, 4, h.skinShade);
+  r(cx - 16, 58 + y0, 2, 9, h.skin); r(cx + 14, 58 + y0, 2, 9, h.skinShade);
+
+  if (h.beard) {
+    r(cx - 12, 68 + y0, 24, 6, h.beardColor); r(cx - 10, 74 + y0, 20, 3, h.beardColor); r(cx - 7, 77 + y0, 14, 3, h.beardColor);
+    r(cx - 5, 70 + y0, 10, 3, h.skin);
+  }
+
+  // шапка или волосы
+  if (h.hat && h.hat.enabled) {
+    const hc = h.hat.color, hs = h.hat.shade;
+    r(cx - 6, 24 + y0, 12, 2, hc);
+    r(cx - 11, 26 + y0, 22, 4, hc);
+    r(cx - 14, 30 + y0, 28, 10, hc);
+    for (let x = cx - 12; x < cx + 13; x += 4) r(x, 28 + y0, 1, 11, hs);
+    r(cx - 16, 40 + y0, 32, 10, hc);
+    for (let x = cx - 15; x < cx + 16; x += 3) r(x, 41 + y0, 1, 8, hs);
+    r(cx - 16, 49 + y0, 32, 1, hs);
+    r(cx - 14, 50 + y0, 2, 8, h.hair); r(cx + 12, 50 + y0, 2, 8, h.hair);
+  } else {
+    r(cx - 13, 34 + y0, 26, 4, h.hair);
+    r(cx - 15, 38 + y0, 30, 10, h.hair);
+    r(cx - 15, 48 + y0, 3, 10, h.hair); r(cx + 12, 48 + y0, 3, 10, h.hair);
+    r(cx - 8, 46 + y0, 10, 3, h.hair);
+  }
+
+  // лицо
+  r(cx - 10, 54 + y0, 7, 2, h.hair); r(cx + 3, 54 + y0, 7, 2, h.hair);
+  if (blink) {
+    r(cx - 9, 60 + y0, 5, 1, '#5a3a2a'); r(cx + 4, 60 + y0, 5, 1, '#5a3a2a');
+  } else {
+    r(cx - 9, 58 + y0, 5, 4, '#f4f1ec'); r(cx + 4, 58 + y0, 5, 4, '#f4f1ec');
+    r(cx - 7, 58 + y0, 3, 4, h.eyes); r(cx + 5, 58 + y0, 3, 4, h.eyes);
+    r(cx - 6, 59 + y0, 1, 2, '#111'); r(cx + 6, 59 + y0, 1, 2, '#111');
+  }
+  if (h.glasses) {
+    r(cx - 11, 57 + y0, 9, 1, '#222'); r(cx + 2, 57 + y0, 9, 1, '#222');
+    r(cx - 11, 62 + y0, 9, 1, '#222'); r(cx + 2, 62 + y0, 9, 1, '#222');
+    r(cx - 11, 57 + y0, 1, 6, '#222'); r(cx - 3, 57 + y0, 1, 6, '#222');
+    r(cx + 2, 57 + y0, 1, 6, '#222'); r(cx + 10, 57 + y0, 1, 6, '#222'); r(cx - 2, 59 + y0, 4, 1, '#222');
+  }
+  r(cx - 1, 62 + y0, 2, 6, h.skinShade); r(cx - 2, 67 + y0, 4, 1, h.skinShade);
+  if (mouth === 0) {
+    r(cx - 4, 71 + y0, 8, 1, '#8a4a3e'); r(cx - 5, 70 + y0, 1, 1, '#8a4a3e'); r(cx + 4, 70 + y0, 1, 1, '#8a4a3e');
+  } else {
+    r(cx - 4, 70 + y0, 8, mouth + 1, '#4a1f1a');
+    r(cx - 3, 70 + y0, 6, 1, '#f4f1ec');
+  }
+}
+
+function drawArms(pose, cx, b, t) {
+  const h = D.hero, H_ = h.hoodie, SH = h.hoodieShade, SK = h.skin;
+  const left = () => { r(cx - 32, 98 + b, 7, 24, H_); r(cx - 32, 98 + b, 1, 24, SH); };
+  const right = () => { r(cx + 25, 98 + b, 7, 24, H_); r(cx + 31, 98 + b, 1, 24, SH); };
+  switch (pose) {
+    case 'point': { // указывает в сторону
+      left();
+      const wig = Math.round(Math.sin(t * 3));
+      r(cx + 24, 96 + b, 8, 10, H_);
+      r(cx + 30, 98 + b, 18, 7, H_); r(cx + 30, 104 + b, 18, 1, SH);
+      r(cx + 47, 98 + b, 2, 7, SH);
+      r(cx + 49, 99 + b, 6, 6, SK);
+      r(cx + 55, 99 + b + wig * 0, 6 + wig, 2, SK);
+      break;
+    }
+    case 'finger_up': { // «внимание!»
+      left();
+      r(cx + 24, 80 + b, 8, 22, H_); r(cx + 31, 80 + b, 1, 22, SH);
+      r(cx + 24, 78 + b, 9, 2, SH);
+      r(cx + 24, 70 + b, 8, 8, SK);
+      r(cx + 27, 62 + b, 2, 8, SK);
+      break;
+    }
+    case 'wave': { // приветствие
+      left();
+      const s = Math.round(Math.sin(t * 8) * 1.5);
+      r(cx + 24, 80 + b, 8, 22, H_);
+      r(cx + 23 + s, 66 + b, 10, 12, SK);
+      for (let k = 0; k < 4; k++) r(cx + 23 + s + k * 3, 62 + b, 2, 4, SK);
+      break;
+    }
+    case 'shrug': { // «ну как бы…»
+      r(cx - 48, 100 + b, 20, 7, H_); r(cx - 55, 99 + b, 8, 5, SK);
+      r(cx + 28, 100 + b, 20, 7, H_); r(cx + 47, 99 + b, 8, 5, SK);
+      break;
+    }
+    case 'crossed': { // руки скрещены
+      r(cx - 26, 100 + b, 52, 10, SH); r(cx - 24, 101 + b, 48, 8, H_);
+      r(cx - 24, 102 + b, 5, 6, SK); r(cx + 19, 102 + b, 5, 6, SK);
+      break;
+    }
+    case 'think': { // рука у подбородка
+      left();
+      r(cx + 12, 86 + b, 8, 16, H_);
+      r(cx + 6, 78 + b, 9, 8, SK);
+      break;
+    }
+    default:
+      left(); right();
+  }
+}
+
+// ───────────── субтитры (по 1–2 слова, как в рилсах) ─────────────
+
+function drawCaption(t) {
+  let chunk = null;
+  for (const ch of D.chunks) if (t >= ch.start && t < ch.end) chunk = ch;
+  if (!chunk) return;
+  const pop = easeOut((t - chunk.start) / 0.12);
+  ctx.save();
+  ctx.translate(W / 2, TOP + 90);
+  ctx.scale(0.85 + 0.15 * pop, 0.85 + 0.15 * pop);
+  ctx.font = `800 68px ${SANS}`;
+  ctx.textBaseline = 'middle';
+  const parts = chunk.words.map((w) => ({ ...w, w: ctx.measureText(w.text).width }));
+  const space = ctx.measureText(' ').width;
+  let x = -(parts.reduce((s, p) => s + p.w, 0) + space * (parts.length - 1)) / 2;
+  ctx.lineWidth = 12; ctx.lineJoin = 'round'; ctx.strokeStyle = 'rgba(10,8,6,0.85)';
+  for (const p of parts) {
+    ctx.strokeText(p.text, x, 0);
+    ctx.fillStyle = p.accent ? ORANGE : '#fff';
+    ctx.fillText(p.text, x, 0);
+    x += p.w + space;
+  }
+  ctx.restore();
+}
+</script>
+</body>
+</html>
