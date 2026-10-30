@@ -85,6 +85,12 @@ function drawTop(scene, lt, si) {
   const a = easeOut(lt / 0.35);
   ctx.save();
   ctx.globalAlpha = a;
+  if (!scene.card) {
+    // без карточки — крупный заголовок по центру верхней половины
+    ctx.translate(W / 2, 430);
+    ctx.scale(1.35, 1.35);
+    ctx.translate(-W / 2, -190);
+  }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
   const hasAccent = !!scene.accent;
